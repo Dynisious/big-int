@@ -1,5 +1,5 @@
 //! Author --- DMorgan  
-//! Last Moddified --- 2019-12-31
+//! Last Moddified --- 2019-01-03
 
 use crate::{SInt, FromIntError, IntErrorKind, ParseIntError, private::Sealed,};
 use alloc::{vec::Vec, boxed::Box,};
@@ -13,6 +13,9 @@ use core::{
     Sub, SubAssign,
     Mul, MulAssign,
     Div, DivAssign,
+    BitAnd, BitAndAssign,
+    BitOr, BitOrAssign,
+    BitXor, BitXorAssign,
   },
   num::NonZeroUsize,
   cmp::Ordering,
@@ -31,11 +34,6 @@ mod serde;
 #[derive(Clone, Copy, Hash,)]
 pub struct UInt<B = Vec<u8>,>(pub(crate) B,)
   where B: Borrow<[u8]>,;
-
-impl UInt<Vec<u8>,> {
-  /// A zero `UInt`.
-  pub const ZERO: Self = UInt(Vec::new(),);
-}
 
 impl<'a,> UInt<&'a mut [u8],> {
   /// Converts the `le` slice bytes into `UInt` bytes.
@@ -128,6 +126,9 @@ impl UInt<[u8; 1],> {
 }
 
 impl UInt<Vec<u8>,> {
+  /// A zero `UInt`.
+  pub const ZERO: Self = UInt(Vec::new(),);
+
   /// Creates a new `UInt` from a `Vec` of little endian bytes.
   /// 
   /// # Params
@@ -141,13 +142,37 @@ impl UInt<Vec<u8>,> {
 
     UInt(le_bytes,)
   }
+  /// Calculates the previous power of two less than or equal too `self`.
+  /// 
+  /// A value of zero remains at zero.
+  pub fn prev_power_of_two(mut self,) -> Self {
+    //Calculate the previous power of two.
+    if let Some((last, rest,)) = self.0.split_last_mut() {
+      //Get the leading byte.
+
+      //Zero the rest of the bytes.
+      for b in rest { *b = 0 }
+
+      //Calculate the previous power of two.
+      *last = ((*last >> 1) + 1).next_power_of_two();
+    }
+
+    self
+  }
+  /// Calculates the next power of two greater than `self`.
+  pub fn next_power_of_two(mut self,) -> Self {
+    //`0` maps to `1`.
+    if self == UInt::ZERO { self.0.push(1,); self }
+    //Calculating the next power of two is just the previous power of two doubled.
+    else { self.prev_power_of_two() << 1u8 }
+  }
   /// Calculates the `remainder` after division by `rhs` and mutates `self` into the
   /// `quotient`.
   /// 
   /// # Params
   /// 
   /// divisor --- The right hand side of the division.  
-  pub fn rem<A,>(&mut self, divisor: UInt<A,>,) -> UInt<Vec<u8>,>
+  pub fn rem<A,>(&mut self, divisor: &UInt<A,>,) -> UInt<Vec<u8>,>
     where A: Borrow<[u8]>, {
     use core::{iter, mem,};
 
@@ -378,6 +403,7 @@ mod cmp {
 
       let lhs = lhs.iter().copied().rev();
       let rhs = rhs.iter().rev();
+
       //Compare from the highest bytes first.
       lhs.zip(rhs,).map(|(a, b,),| a.cmp(b,),)
       //Filter out equal bytes.
@@ -397,21 +423,16 @@ mod cmp {
 mod add {
   use super::*;
 
-  impl<A,> AddAssign<UInt<A,>> for UInt<Vec<u8>,>
-    where A: Borrow<[u8]>, {
-    fn add_assign(&mut self, rhs: UInt<A,>,) {
+  impl AddAssign<UInt<Vec<u8>,>> for UInt<Vec<u8>,> {
+    fn add_assign(&mut self, mut rhs: UInt<Vec<u8>,>,) {
       use core::mem;
 
-      let rhs = rhs.0.borrow();
       //Find the longer VLQ.
-      let len_cmp = self.0.len().cmp(&rhs.len(),);
-      //Ensure `self` is the longer of the two VLQs and perform addition.
-      if len_cmp == Ordering::Less {
-        let mut rhs = UInt(rhs,).into_vec();
+      let len_cmp = self.0.len().cmp(&rhs.0.len(),);
+      //Ensure `self` is the longer of the two VLQs.
+      if len_cmp == Ordering::Less { mem::swap(self, &mut rhs,) }
 
-        mem::swap(self, &mut rhs,);
-        unsafe { self.add_bytes(&rhs.0,); }
-      } else { unsafe { self.add_bytes(&rhs,); } }
+      unsafe { self.add_bytes(&rhs.0,) }
     }
   }
 
@@ -440,51 +461,20 @@ mod add {
     fn add_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self += &*rhs }
   }
 
+  impl AddAssign<u8> for UInt<Vec<u8>,> {
+    fn add_assign(&mut self, rhs: u8,) { *self += &UInt::from(rhs,) }
+  }
+
   impl AddAssign<usize> for UInt<Vec<u8>,> {
-    fn add_assign(&mut self, rhs: usize,) {
-      let mut rhs = rhs.to_le_bytes();
-
-      *self += UInt(UInt::bytes_to_uint(&mut rhs,),);
-    }
+    fn add_assign(&mut self, rhs: usize,) { *self += &UInt::from(rhs,) }
   }
 
-  impl<A,> AddAssign<UInt<A,>> for UInt<&'_ mut [u8],>
-    where A: Borrow<[u8]>, {
-    fn add_assign(&mut self, rhs: UInt<A,>,) {
-      let rhs = rhs.0.borrow();
-      //Find the longer VLQ.
-      let len_cmp = self.0.len().cmp(&rhs.len(),);
-      //Ensure `self` is the longer of the two VLQs and perform addition.
-      let overflow = len_cmp == Ordering::Less || unsafe { self.half_add_bytes(&rhs,) };
-      assert!(overflow, "`lhs + rhs` overflowed, consider using `UInt<Vec<u8>>` or `UInt::into_vec` to handle overflow",);
-    }
-  }
-
-  impl<'a, A,> AddAssign<&'a mut UInt<A,>> for UInt<&'a mut [u8],>
-    where A: BorrowMut<[u8]>, {
-    fn add_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self += UInt(rhs.0.borrow_mut(),) }
-  }
-
-  impl AddAssign<usize> for UInt<&'_ mut [u8],> {
-    fn add_assign(&mut self, rhs: usize,) {
-      let mut rhs = rhs.to_le_bytes();
-
-      *self += UInt(rhs.borrow_mut(),);
-    }
-  }
-
-  impl<A, Rhs,> Add<Rhs,> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: AddAssign<Rhs>,
-      Self: IntoVec, {
+  impl<Rhs,> Add<Rhs,> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: AddAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    fn add(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-
-      temp += rhs; temp
-    }
-  } 
+    fn add(mut self, rhs: Rhs,) -> Self::Output { self += rhs; self }
+  }
 
   impl<A, Rhs,> Add<Rhs,> for &'_ UInt<A,>
     where A: Borrow<[u8]>,
@@ -529,54 +519,21 @@ mod sub {
     fn sub_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self -= &*rhs }
   }
 
+  impl SubAssign<u8> for UInt<Vec<u8>,> {
+    fn sub_assign(&mut self, rhs: u8,) { *self -= UInt::from(rhs,) }
+  }
+
   impl SubAssign<usize> for UInt<Vec<u8>,> {
-    fn sub_assign(&mut self, rhs: usize,) {
-      let mut rhs = rhs.to_le_bytes();
-
-      *self -= UInt(UInt::bytes_to_uint(&mut rhs,),);
-    }
+    fn sub_assign(&mut self, rhs: usize,) { *self -= UInt::from(rhs,) }
   }
 
-  impl<A,> SubAssign<UInt<A,>> for UInt<&'_ mut [u8],>
-    where A: Borrow<[u8]>, {
-    fn sub_assign(&mut self, rhs: UInt<A,>,) {
-      let rhs = rhs.into_slice();
-
-      assert!(*self >= rhs, "`lhs - rhs` requires `rhs` be smaller than `lhs`",);
-      let underflow = unsafe { self.half_sub_bytes(rhs.0,) }.is_some();
-      //Trim the bytes on underflow.
-      if underflow { self.0 = unsafe { &mut *(UInt::bytes_to_uint(&mut self.0,) as *mut _) } }
-    }
-  }
-
-  impl<'a, A,> SubAssign<&'a UInt<A,>> for UInt<&'_ mut [u8],>
-    where A: Borrow<[u8]>, {
-    fn sub_assign(&mut self, rhs: &'a UInt<A,>,) { *self -= rhs.into_slice() }
-  }
-
-  impl<'a, A,> SubAssign<&'a mut UInt<A,>> for UInt<&'_ mut [u8],>
-    where A: Borrow<[u8]>, {
-    fn sub_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self -= &*rhs }
-  }
-
-  impl SubAssign<usize> for UInt<&'_ mut [u8],> {
-    fn sub_assign(&mut self, rhs: usize,) {
-      let mut rhs = rhs.to_le_bytes();
-
-      *self -= UInt(rhs.borrow_mut(),);
-    }
-  }
-
-  impl<A, Rhs,> Sub<Rhs,> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: SubAssign<Rhs>,
+  impl<Rhs,> Sub<Rhs,> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: SubAssign<Rhs>,
       Self: IntoVec, {
     type Output = UInt<Vec<u8>,>;
 
-    fn sub(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-
-      temp -= rhs; temp
+    fn sub(mut self, rhs: Rhs,) -> Self::Output {
+      self -= rhs; self
     }
   } 
 
@@ -618,11 +575,7 @@ mod mul {
   }
 
   impl MulAssign<usize> for UInt<Vec<u8>,> {
-    fn mul_assign(&mut self, rhs: usize,) {
-      let mut rhs = rhs.to_le_bytes();
-
-      *self *= UInt(UInt::bytes_to_uint(&mut rhs,),);
-    }
+    fn mul_assign(&mut self, rhs: usize,) { *self *= UInt::from(rhs,) }
   }
 
   impl MulAssign<u8> for UInt<Vec<u8>,> {
@@ -651,16 +604,12 @@ mod mul {
     }
   }
 
-  impl<A, Rhs,> Mul<Rhs> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: MulAssign<Rhs>,
-      Self: IntoVec, {
+  impl<Rhs,> Mul<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: MulAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    fn mul(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-
-      temp *= rhs; temp
+    fn mul(mut self, rhs: Rhs,) -> Self::Output {
+      self *= rhs; self
     }
   }
 
@@ -688,7 +637,7 @@ mod div {
 
   impl<A,> DivAssign<UInt<A,>> for UInt<Vec<u8>,>
     where A: Borrow<[u8]>, {
-    fn div_assign(&mut self, rhs: UInt<A,>,) { self.rem(rhs.into_slice(),); }
+    fn div_assign(&mut self, rhs: UInt<A,>,) { self.rem(&rhs,); }
   }
 
   impl<'a, A,> DivAssign<&'a UInt<A,>> for UInt<Vec<u8>,>
@@ -698,25 +647,22 @@ mod div {
 
   impl<'a, A,> DivAssign<&'a mut UInt<A,>> for UInt<Vec<u8>,>
     where A: Borrow<[u8]>, {
-    fn div_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self /= rhs.into_slice() }
+    fn div_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self /= &*rhs }
+  }
+
+  impl DivAssign<u8> for UInt<Vec<u8>,> {
+    fn div_assign(&mut self, rhs: u8,) { *self /= UInt::from(rhs,) }
   }
 
   impl DivAssign<usize> for UInt<Vec<u8>,> {
-    fn div_assign(&mut self, rhs: usize,) {
-      let mut rhs = rhs.to_le_bytes();
-
-      *self /= UInt(UInt::bytes_to_uint(&mut rhs,),);
-    }
+    fn div_assign(&mut self, rhs: usize,) { *self /= UInt::from(rhs,) }
   }
 
-  impl<A, Rhs,> Div<Rhs,> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: DivAssign<Rhs>,
-      Self: IntoVec, {
+  impl<Rhs,> Div<Rhs,> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: DivAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    #[inline]
-    fn div(self, rhs: Rhs,) -> Self::Output { &self / rhs }
+    fn div(mut self, rhs: Rhs,) -> Self::Output { self /= rhs; self }
   } 
 
   impl<A, Rhs,> Div<Rhs,> for &'_ UInt<A,>
@@ -724,11 +670,7 @@ mod div {
       UInt<Vec<u8>,>: DivAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    fn div(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-
-      temp /= rhs; temp
-    }
+    fn div(self, rhs: Rhs,) -> Self::Output { self.into_vec() / rhs }
   } 
 
   impl<A, Rhs,> Div<Rhs,> for &'_ mut UInt<A,>
@@ -747,7 +689,11 @@ mod rem {
 
   impl<'a, A: 'a,> RemAssign<UInt<A,>> for UInt<Vec<u8>,>
     where A: Borrow<[u8]>, {
-    fn rem_assign(&mut self, rhs: UInt<A,>,) { *self = self.rem(rhs,) }
+    fn rem_assign(&mut self, rhs: UInt<A,>,) { *self = self.rem(&rhs,) }
+  }
+
+  impl RemAssign<u8> for UInt<Vec<u8>,> {
+    fn rem_assign(&mut self, rhs: u8,) { *self %= UInt::from(rhs,) }
   }
 
   impl RemAssign<usize> for UInt<Vec<u8>,> {
@@ -764,14 +710,11 @@ mod rem {
     fn rem_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self %= rhs.into_slice() }
   }
 
-  impl<A, Rhs,> Rem<Rhs> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: RemAssign<Rhs>,
-      Self: IntoVec, {
+  impl<Rhs,> Rem<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: RemAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    #[inline]
-    fn rem(self, rhs: Rhs,) -> Self::Output { &self % rhs }
+    fn rem(mut self, rhs: Rhs,) -> Self::Output { self %= rhs; self }
   }
 
   impl<A, Rhs,> Rem<Rhs> for &'_ UInt<A,>
@@ -779,11 +722,7 @@ mod rem {
       UInt<Vec<u8>,>: RemAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    fn rem(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-      
-      temp %= rhs; temp
-    }
+    fn rem(self, rhs: Rhs,) -> Self::Output { self.into_vec() % rhs }
   }
 
   impl<A, Rhs,> Rem<Rhs> for &'_ mut UInt<A,>
@@ -839,6 +778,7 @@ mod shl {
         //Append the new high byte.
         if overflow > 0 { self.0.push(overflow,) }
       }
+
       //Insert all of the full bytes.
       self.0.splice(..0, iter::repeat(0,).take(full_bytes,),);
     }
@@ -848,14 +788,11 @@ mod shl {
     fn shl_assign(&mut self, rhs: u8,) { *self <<= rhs as usize }
   }
 
-  impl<A, Rhs,> Shl<Rhs> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: ShlAssign<Rhs>,
-      Self: IntoVec, {
+  impl<Rhs,> Shl<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: ShlAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    #[inline]
-    fn shl(self, rhs: Rhs,) -> Self::Output { &self << rhs }
+    fn shl(mut self, rhs: Rhs,) -> Self::Output { self <<= rhs; self }
   }
 
   impl<A, Rhs,> Shl<Rhs> for &'_ UInt<A,>
@@ -863,11 +800,7 @@ mod shl {
       UInt<Vec<u8>,>: ShlAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    fn shl(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-
-      temp <<= rhs; temp
-    }
+    fn shl(self, rhs: Rhs,) -> Self::Output { self.into_vec() << rhs }
   }
 
   impl<A, Rhs,> Shl<Rhs> for &'_ mut UInt<A,>
@@ -928,17 +861,11 @@ mod shr {
     fn shr_assign(&mut self, rhs: u8,) { *self >>= rhs as usize }
   }
 
-  impl<A, Rhs,> Shr<Rhs> for UInt<A,>
-    where A: Borrow<[u8]>,
-      UInt<Vec<u8>,>: ShrAssign<Rhs>,
-      Self: IntoVec, {
+  impl<Rhs,> Shr<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: ShrAssign<Rhs>, {
     type Output = UInt<Vec<u8>,>;
 
-    fn shr(self, rhs: Rhs,) -> Self::Output {
-      let mut temp = self.into_vec();
-
-      temp >>= rhs; temp
-    }
+    fn shr(mut self, rhs: Rhs,) -> Self::Output { self >>= rhs; self }
   }
 
   impl<A, Rhs,> Shr<Rhs> for &'_ UInt<A,>
@@ -956,6 +883,190 @@ mod shr {
 
     #[inline]
     fn shr(self, rhs: Rhs,) -> Self::Output { &*self >> rhs }
+  }
+
+}
+
+mod and {
+  use super::*;
+
+  impl<'a, A,> BitAndAssign<&'a UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitand_assign(&mut self, rhs: &'a UInt<A,>,) {
+      let rhs = rhs.into_slice();
+
+      self.0.truncate(rhs.0.len(),);
+
+      for (a, &b,) in self.0.iter_mut().zip(rhs.0,) { *a &= b }
+
+      let len = UInt::bytes_to_uint(&mut self.0,).len();
+      self.0.truncate(len,);
+    }
+  }
+
+  impl<A,> BitAndAssign<UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitand_assign(&mut self, rhs: UInt<A,>,) { *self &= &rhs }
+  }
+
+  impl<'a, A,> BitAndAssign<&'a mut UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitand_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self &= &*rhs }
+  }
+
+  impl BitAndAssign<usize> for UInt<Vec<u8>,> {
+    fn bitand_assign(&mut self, rhs: usize,) { *self &= UInt::from(rhs,) }
+  }
+
+  impl BitAndAssign<u8> for UInt<Vec<u8>,> {
+    #[inline]
+    fn bitand_assign(&mut self, rhs: u8,) { *self &= UInt::from(rhs,) }
+  }
+
+  impl<Rhs,> BitAnd<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: BitAndAssign<Rhs>, {
+    type Output = UInt<Vec<u8>,>;
+
+    fn bitand(mut self, rhs: Rhs,) -> Self::Output { self &= rhs; self }
+  }
+
+  impl<A, Rhs,> BitAnd<Rhs> for &'_ UInt<A,>
+    where A: Borrow<[u8]>,
+      UInt<Vec<u8>,>: BitAnd<Rhs>, {
+    type Output = <UInt<Vec<u8>,> as BitAnd<Rhs>>::Output;
+
+    fn bitand(self, rhs: Rhs,) -> Self::Output { self.into_vec() & rhs }
+  }
+
+  impl<'a, A, Rhs,> BitAnd<Rhs> for &'a mut UInt<A,>
+    where A: Borrow<[u8]>,
+      UInt<Vec<u8>,>: BitAnd<Rhs>, {
+    type Output = <&'a UInt<A,> as BitAnd<Rhs>>::Output;
+
+    #[inline]
+    fn bitand(self, rhs: Rhs,) -> Self::Output { &*self & rhs }
+  }
+
+}
+
+mod or {
+  use super::*;
+
+  impl<'a, A,> BitOrAssign<&'a UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitor_assign(&mut self, rhs: &'a UInt<A,>,) {
+      let rhs = rhs.into_slice();
+
+      for (a, &b,) in self.0.iter_mut().zip(rhs.0,) { *a |= b }
+      if self.0.len() < rhs.0.len() { self.0.extend(rhs.0[self.0.len()..].iter().copied(),) }
+
+      let len = UInt::bytes_to_uint(&mut self.0,).len();
+      self.0.truncate(len,);
+    }
+  }
+
+  impl<A,> BitOrAssign<UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitor_assign(&mut self, rhs: UInt<A,>,) { *self |= &rhs }
+  }
+
+  impl<'a, A,> BitOrAssign<&'a mut UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitor_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self |= &*rhs }
+  }
+
+  impl BitOrAssign<usize> for UInt<Vec<u8>,> {
+    fn bitor_assign(&mut self, rhs: usize,) { *self |= UInt::from(rhs,) }
+  }
+
+  impl BitOrAssign<u8> for UInt<Vec<u8>,> {
+    #[inline]
+    fn bitor_assign(&mut self, rhs: u8,) { *self |= UInt::from(rhs,) }
+  }
+
+  impl<Rhs,> BitOr<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: BitOrAssign<Rhs>, {
+    type Output = UInt<Vec<u8>,>;
+
+    fn bitor(mut self, rhs: Rhs,) -> Self::Output { self |= rhs; self }
+  }
+
+  impl<A, Rhs,> BitOr<Rhs> for &'_ UInt<A,>
+    where A: Borrow<[u8]>,
+      UInt<Vec<u8>,>: BitOr<Rhs>, {
+    type Output = <UInt<Vec<u8>,> as BitOr<Rhs>>::Output;
+
+    fn bitor(self, rhs: Rhs,) -> Self::Output { self.into_vec() | rhs }
+  }
+
+  impl<'a, A, Rhs,> BitOr<Rhs> for &'a mut UInt<A,>
+    where A: Borrow<[u8]>,
+      UInt<Vec<u8>,>: BitOr<Rhs>, {
+    type Output = <&'a UInt<A,> as BitOr<Rhs>>::Output;
+
+    #[inline]
+    fn bitor(self, rhs: Rhs,) -> Self::Output { &*self | rhs }
+  }
+
+}
+
+mod xor {
+  use super::*;
+
+  impl<'a, A,> BitXorAssign<&'a UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitxor_assign(&mut self, rhs: &'a UInt<A,>,) {
+      let rhs = rhs.into_slice();
+
+      for (a, &b,) in self.0.iter_mut().zip(rhs.0,) { *a ^= b }
+      if self.0.len() < rhs.0.len() { self.0.extend(rhs.0[self.0.len()..].iter().copied(),) }
+
+      let len = UInt::bytes_to_uint(&mut self.0,).len();
+      self.0.truncate(len,);
+    }
+  }
+
+  impl<A,> BitXorAssign<UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitxor_assign(&mut self, rhs: UInt<A,>,) { *self ^= &rhs }
+  }
+
+  impl<'a, A,> BitXorAssign<&'a mut UInt<A,>> for UInt<Vec<u8>,>
+    where A: Borrow<[u8]>, {
+    fn bitxor_assign(&mut self, rhs: &'a mut UInt<A,>,) { *self ^= &*rhs }
+  }
+
+  impl BitXorAssign<usize> for UInt<Vec<u8>,> {
+    fn bitxor_assign(&mut self, rhs: usize,) { *self ^= UInt::from(rhs,) }
+  }
+
+  impl BitXorAssign<u8> for UInt<Vec<u8>,> {
+    #[inline]
+    fn bitxor_assign(&mut self, rhs: u8,) { *self ^= UInt::from(rhs,) }
+  }
+
+  impl<Rhs,> BitXor<Rhs> for UInt<Vec<u8>,>
+    where UInt<Vec<u8>,>: BitXorAssign<Rhs>, {
+    type Output = UInt<Vec<u8>,>;
+
+    fn bitxor(mut self, rhs: Rhs,) -> Self::Output { self ^= rhs; self }
+  }
+
+  impl<A, Rhs,> BitXor<Rhs> for &'_ UInt<A,>
+    where A: Borrow<[u8]>,
+      UInt<Vec<u8>,>: BitXor<Rhs>, {
+    type Output = <UInt<Vec<u8>,> as BitXor<Rhs>>::Output;
+
+    fn bitxor(self, rhs: Rhs,) -> Self::Output { self.into_vec() ^ rhs }
+  }
+
+  impl<'a, A, Rhs,> BitXor<Rhs> for &'a mut UInt<A,>
+    where A: Borrow<[u8]>,
+      UInt<Vec<u8>,>: BitXor<Rhs>, {
+    type Output = <&'a UInt<A,> as BitXor<Rhs>>::Output;
+
+    #[inline]
+    fn bitxor(self, rhs: Rhs,) -> Self::Output { &*self ^ rhs }
   }
 
 }
@@ -1054,13 +1165,12 @@ impl<A,> fmt::Display for UInt<A,>
 
     let mut num = self.into_vec();
     let ten = UInt::from(10usize,);
-    let ten = ten.into_slice();
     //Get the digits in reverse order.
     let buffer = iter::from_fn(move || {
       if num == UInt::ZERO { return None }
 
       //Get the next digit.
-      let digit = u8::try_from(UInt::rem(&mut num, ten,),).unwrap_or(0,);
+      let digit = u8::try_from(UInt::rem(&mut num, &ten,),).unwrap_or(0,);
 
       Some(digit)
     },).collect::<Vec<_>>();

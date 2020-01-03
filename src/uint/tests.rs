@@ -1,5 +1,5 @@
 //! Author --- DMorgan  
-//! Last Moddified --- 2019-12-31
+//! Last Moddified --- 2019-01-03
 
 #![cfg(test,)]
 
@@ -21,6 +21,17 @@ fn test_UInt_convert() {
     let bytes = &bytes[..len];
 
     assert_eq!(bytes, &*int.0, "Conversion failed on {} with {:?}", num, int,);
+  }
+}
+
+#[allow(non_snake_case,)]
+#[test]
+fn test_UInt_power_of_two() {
+  for num in (2usize..=1000).map(|n,| n * n,).map(|n,| n + 1,) {
+    let target = UInt::from(num.next_power_of_two(),);
+    let int = UInt::from(num,).next_power_of_two();
+
+    assert_eq!(int, target, "Next power of two failed on {} with {:?}", num, int,);
   }
 }
 
@@ -119,13 +130,13 @@ fn test_UInt_mul_div() {
   }
 
   let mut num = ten.clone();
-  UInt::rem(&mut num, one.into_slice(),);
+  UInt::rem(&mut num, &one,);
   assert_eq!(num, ten, "`div_bytes 10 / 1` failed",);
   assert_eq!(&ten / &one, ten, "`10 / 1` failed",);
 
   let four = UInt(vec![0b100,],);
   let mut num = twenty.clone();
-  UInt::rem(&mut num, five.into_slice(),);
+  UInt::rem(&mut num, &five,);
   assert_eq!(num, four, "`div_bytes 20 / 5` failed",);
   assert_eq!(&twenty / &five, four, "`20 / 5` failed",);
 
@@ -134,7 +145,7 @@ fn test_UInt_mul_div() {
     let num_b = UInt::from(b,);
     let num_a = UInt::from(a,);
     let mut num = num_a.clone();
-    UInt::rem(&mut num, num_b.into_slice(),);
+    UInt::rem(&mut num, &num_b,);
     assert_eq!(num, target, "`mul_bytes {} / {}` failed, got {}", a, b, num,);
     assert_eq!(num_a / num_b, target, "`{} / {}` failed", a, b,);
   }
@@ -173,11 +184,11 @@ fn test_UInt_rem() {
   let twenty = UInt(vec![0b10100,],);
 
   let mut num = ten.clone();
-  num %= 3;
+  num %= 3u8;
   assert_eq!(num, one, "`10 % 3` failed, got {}", num,);
 
   let mut num = twenty.clone();
-  num %= 3;
+  num %= 3u8;
   assert_eq!(num, two, "`20 % 2` failed, got {}", num,);
 
   for (a, b,) in (1usize..1000).map(|n,| (n * n, n,),) {
@@ -187,6 +198,45 @@ fn test_UInt_rem() {
     num %= b;
     assert_eq!(num, target, "`{} % {}` failed, got {}", a, b, num,);
     assert_eq!(num_a % b, target, "`{} % {}` failed", a, b,);
+  }
+}
+
+#[allow(non_snake_case,)]
+#[test]
+fn test_UInt_bit_ops() {
+  let one = UInt(vec![1,],);
+  let two = UInt(vec![2,],);
+  let three = UInt(vec![0b11,],);
+  let ten = UInt(vec![0b1010,],);
+
+  assert_eq!(&ten & UInt::ZERO, UInt::ZERO, "`10 & 0` failed",);
+  assert_eq!(&one & &two, UInt::ZERO, "`1 & 2` failed",);
+
+  for (a, b,) in (0usize..1000).map(|n,| (n * n, n,),) {
+    let target = UInt::from(a & b,);
+    let num_b = UInt::from(b,);
+    let num_a = UInt::from(a,);
+    assert_eq!(num_a & num_b, target, "`{} & {}` failed", a, b,);
+  }
+
+  assert_eq!(&ten | UInt::ZERO, ten, "`10 | 0` failed",);
+  assert_eq!(&one | &two, three, "`1 | 2` failed",);
+
+  for (a, b,) in (0usize..1000).map(|n,| (n * n, n,),) {
+    let target = UInt::from(a | b,);
+    let num_b = UInt::from(b,);
+    let num_a = UInt::from(a,);
+    assert_eq!(num_a | num_b, target, "`{} | {}` failed", a, b,);
+  }
+
+  assert_eq!(&ten ^ UInt::ZERO, ten, "`10 ^ 0` failed",);
+  assert_eq!(&one ^ &two, three, "`1 ^ 2` failed",);
+
+  for (a, b,) in (0usize..1000).map(|n,| (n * n, n,),) {
+    let target = UInt::from(a ^ b,);
+    let num_b = UInt::from(b,);
+    let num_a = UInt::from(a,);
+    assert_eq!(num_a ^ num_b, target, "`{} ^ {}` failed", a, b,);
   }
 }
 

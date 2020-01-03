@@ -5,7 +5,7 @@
 
 #![no_std]
 #![deny(missing_docs,)]
-#![feature(const_fn, const_if_match, try_blocks, never_type, int_error_matching, str_strip,)]
+#![feature(const_fn, const_if_match, try_blocks, never_type, int_error_matching, str_strip, wrapping_next_power_of_two,)]
 
 #[macro_use]
 extern crate alloc;

@@ -68,7 +68,7 @@ impl SInt<Vec<u8>,> {
     divisor.mark_unsigned();
     //Calculate the remainder; no special treatment is needed as an unsigned `SInt` is an
     //even `UInt` therefore the remainder will keep the sign of `self`.
-    let mut rem = SInt(UInt::rem(&mut self.0, divisor.0.into_slice(),),);
+    let mut rem = SInt(UInt::rem(&mut self.0, &divisor.0,),);
     if rem.0 == UInt::ONE { rem.0 = UInt::ZERO }
 
     //Restore the `divisor` sign.

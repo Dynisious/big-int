@@ -1,5 +1,5 @@
 //! Author --- DMorgan  
-//! Last Moddified --- 2019-12-31
+//! Last Moddified --- 2019-01-03
 
 use crate::{SInt, uint::*,};
 use bitio::{Bits, BitWrite, BitRead, ReadIter, WriteIter,};
@@ -47,8 +47,8 @@ pub fn uint_encode<W,>(mut num: UInt<Vec<u8>,>, writer: &mut W,) -> Result<UInt<
       length.0[last] ^= leading_bit;
 
       //Add in the length to the count of encoded bits.
-      length + 1 + encoded_length
-    } else { length + 1 };
+      length + 1u8 + encoded_length
+    } else { length + 1u8 };
 
     //Read all of the bytes in `big endian` order.
     let mut reader = ReadIter::new(num.iter().rev(),);
@@ -73,7 +73,7 @@ pub fn uint_encode<W,>(mut num: UInt<Vec<u8>,>, writer: &mut W,) -> Result<UInt<
   }
 
   //Increment `num` as `0` has no encoding.
-  num += 1;
+  num += 1u8;
   //Skip any leading zeros.
   let skip = Bits::unused_bits(*num.0.last().expect("Failed to read the last byte",),);
   encode(&num.0, skip, writer,)
@@ -93,12 +93,12 @@ pub fn uint_decode<R,>(reader: &mut R,) -> Result<UInt<Vec<u8>,>, R::Error>
     //If the first bit is a `1` then this is the value component.
     let is_value = reader.read_bit()?;
     //Count the bit we just read.
-    length -= 1;
+    length -= 1u8;
 
     //Calculate the number of trailing bits we will need to read in.
     let trailing_bits = try {
       //The number of trailing bits is the remainder after division by `8`.
-      let trailing_bits = length.rem(UInt(8u8.to_le_bytes().as_ref(),),);
+      let trailing_bits = length.rem(&UInt::from(8u8,),);
 
       //Convert the trailing bits into a `Bits` value.
       Bits::try_from(u8::try_from(trailing_bits,).ok()?,).ok()?
@@ -137,9 +137,9 @@ pub fn uint_decode<R,>(reader: &mut R,) -> Result<UInt<Vec<u8>,>, R::Error>
       "Unwritten bytes remained in the writer",
     );
     //All values are incremented before encoding.
-    if is_value { Ok(num - 1) }
+    if is_value { Ok(num - 1u8) }
     //All length components are decremented before encoding.
-    else { decode(num + 1, reader,) }
+    else { decode(num + 1u8, reader,) }
   }
 
   decode(UInt::ONE.into_vec(), reader,)
